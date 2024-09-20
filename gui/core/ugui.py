@@ -14,6 +14,7 @@ from array import array
 import sys
 
 from gui.core.colors import *
+from gui.core.writer import AlphaColor
 from gui.primitives import Pushbutton
 
 if sys.implementation.version < (1, 20, 0):
@@ -419,7 +420,6 @@ class Screen:
     @classmethod
     async def auto_refresh(cls):
         import time
-
         arfsh = hasattr(ssd, "do_refresh")  # Refresh can be asynchronous.
         # By default rfsh_start is permanently set. User code can clear this.
         cls.rfsh_start.set()
@@ -430,18 +430,21 @@ class Screen:
                 arfsh = False
         while True:
             await cls.rfsh_start.wait()
+            if cls.current_screen.sync_update:
+                cls.rfsh_start.clear()
+                s = time.ticks_us()  ## timing debug
+
+            await asyncio.sleep_ms(0)  # Let user code respond to event
             Screen.show(False)  # Update stale controls. No physical refresh.
             # Now perform physical refresh.
-            s = time.ticks_us()
             if arfsh:
                 await ssd.do_refresh(split)
             else:
                 ssd.show()  # Synchronous (blocking) refresh.
-            e = time.ticks_diff(time.ticks_us(), s)
 
-            if cls.current_screen.sync_update:
+            if cls.current_screen.sync_update: # timing debug
+                e = time.ticks_diff(time.ticks_us(), s)
                 print(f'ref: {e} us')
-                cls.rfsh_start.clear()
 
             # Flag user code.
             cls.rfsh_done.set()
@@ -732,7 +735,7 @@ class Widget:
     @draw.setter
     def draw(self, value):
         self._draw = bool(value)
-        if Screen.current_screen.sync_update:
+        if self._draw and Screen.current_screen.sync_update:
             Screen.rfsh_start.set()
 
     def warning(self):
@@ -774,7 +777,8 @@ class Widget:
             dev = display.usegrey(self._greyed_out)
             x = self.col
             y = self.row
-            dev.fill_rect(x, y, self.width, self.height, color_map[BG] if black else self.bgcolor)
+            if black or not isinstance(self.bgcolor,AlphaColor):
+                dev.fill_rect(x, y, self.width, self.height, color_map[BG] if black else self.bgcolor)
         Screen.rfsh_start.set()  # tell driver that we need a refresh TODO: This might not be needed
         return True
 

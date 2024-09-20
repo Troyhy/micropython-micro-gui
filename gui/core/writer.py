@@ -24,11 +24,14 @@
 import framebuf
 from uctypes import bytearray_at, addressof
 from sys import implementation
-import os
+
 
 __version__ = (0, 5, 1)
 
 fast_mode = True  # Does nothing. Kept to avoid breaking code.
+
+class AlphaColor(int):
+    pass
 
 class DisplayState():
     def __init__(self):
@@ -253,6 +256,7 @@ class Writer():
     def setcolor(self, *_):
         return self.fgcolor, self.bgcolor
 
+
 # Writer for colour displays.
 class CWriter(Writer):
 
@@ -292,7 +296,10 @@ class CWriter(Writer):
         palette = self.device.palette
         palette.bg(self.fgcolor if invert else self.bgcolor)
         palette.fg(self.bgcolor if invert else self.fgcolor)
-        self.device.blit(fbc, s.text_col, s.text_row, -1, palette)
+        if isinstance(self.bgcolor,AlphaColor):
+            self.device.blit(fbc, s.text_col, s.text_row, self.bgcolor, palette)
+        else:
+            self.device.blit(fbc, s.text_col, s.text_row, -1, palette)
         s.text_col += self.char_width
         self.cpos += 1
 

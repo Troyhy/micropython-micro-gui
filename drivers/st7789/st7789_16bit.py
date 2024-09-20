@@ -120,7 +120,7 @@ class ST7789(framebuf.FrameBuffer):
         self._spi_init = init_spi  # Possible user callback
         self._lock = asyncio.Lock()
         self._gscale = True  # Interpret buffer as index into color LUT
-        self.mode = framebuf.RGB565  # Use 4bit greyscale.
+        self.mode = framebuf.RGB565  # Use 16bit RGB565.
         self.palette = BoolPalette(self.mode)
         gc.collect()
         buf = bytearray(height * width * 2)  # Reserve 16bit per pixel

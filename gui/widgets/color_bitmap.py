@@ -30,7 +30,7 @@ class ColorBitMap(Widget):
         *,
         fgcolor=None,
         bgcolor=None,
-        bdcolor=RED,
+        bdcolor=None,
     ):
         super().__init__(writer, row, col, height, width, fgcolor, bgcolor, bdcolor)
 
