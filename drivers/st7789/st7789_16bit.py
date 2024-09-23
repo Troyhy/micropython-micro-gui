@@ -238,6 +238,47 @@ class ST7789(framebuf.FrameBuffer):
         # Row address set
         self._wcd(_ST7789_RASET, int.to_bytes((ys << 16) + ye, 4, "big"))
 
+    # Define the mapping between RAM and the display.
+    # Datasheet section 8.12 p124.
+    # this allows partial update to screen
+    def set_sub_window(self,height, width, x, y, mode):
+        portrait, reflect, usd = 0x20, 0x40, 0x80
+        rht = 320
+        rwd = 240  # RAM ht and width
+        wht = height  # Window (framebuf) dimensions.
+        wwd = width  # In portrait mode wht > wwd
+        if mode & portrait:
+            xoff = self._offset[1]  + x # x and y transposed
+            yoff = self._offset[0] + y
+            xs = xoff
+            xe = wwd + xoff - 1
+            ys = yoff  # y start
+            ye = wht + yoff - 1  # y end
+            if mode & reflect:
+                ys = rwd - wht - yoff
+                ye = rwd - yoff - 1
+            if mode & usd:
+                xs = rht - wwd - xoff
+                xe = rht - xoff - 1
+        else:  # LANDSCAPE
+            xoff = self._offset[0] + x
+            yoff = self._offset[1] + y
+            xs = xoff
+            xe = wwd + xoff - 1
+            ys = yoff  # y start
+            ye = wht + yoff - 1  # y end
+            if mode & usd:
+                ys = rht - wht - yoff
+                ye = rht - yoff - 1
+            if mode & reflect:
+                xs = rwd - wwd - xoff
+                xe = rwd - xoff - 1
+
+        # Col address set.
+        self._wcd(_ST7789_CASET, int.to_bytes((xs << 16) + xe, 4, "big"))
+        # Row address set
+        self._wcd(_ST7789_RASET, int.to_bytes((ys << 16) + ye, 4, "big"))
+
     def greyscale(self, gs=None):
         if gs is not None:
             self._gscale = gs
@@ -260,6 +301,24 @@ class ST7789(framebuf.FrameBuffer):
         for start in range(0, end , bw):
             self._spi.write(buf[start : start + bw])
         self._cs(1)
+
+    def show_partial(self,height, width, x, y):
+        # tell driver that only partial update is coming
+        self.set_sub_window(height, width, x, y, self.mode)
+        bw = width * 2 # size 2 works only for 16 bit colors
+        end = height * width * 2   # size 2 works only for 16bit colors
+        buf = self.mvb
+        if self._spi_init:  # A callback was passed
+            self._spi_init(self._spi)  # Bus may be shared
+        self._dc(0)
+        self._cs(0)
+        self._spi.write(_ST7789_RAMWR)  # RAMWR
+        self._dc(1)
+        for start in range(0, end , bw):
+            self._spi.write(buf[start : start + bw])
+        self._cs(1)
+        self.set_window(self.mode) # reset to normal mode
+
 
     # Asynchronous refresh with support for reducing blocking time.
     async def do_refresh(self, split=5):

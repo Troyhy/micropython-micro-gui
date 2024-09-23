@@ -350,11 +350,27 @@ class Screen:
 
     @classmethod
     def show(cls, force):
+        dirty=False
+        ulx = 10000
+        uly = 10000
+        lrx = 0
+        lry = 0  # devine box Upper-Left-X ...
         for obj in cls.current_screen.displaylist:
             if obj.visible:  # In a buttonlist only show visible button
                 if force or obj.draw:
+                    dirty=True
+                    ulx = min(obj.col, ulx)
+                    uly = min(obj.row, uly)
+                    lrx = max(obj.col + obj.width, lrx)
+                    lry = max(obj.row + obj.height, lry)
                     obj.show()
                     force or print('r:'+str(obj))  # print object that caused update TODO: remove this
+        if dirty:
+            height = lry - uly
+            width = lrx - ulx
+            return width, height , ulx, uly
+
+        return 0, 0, 0, 0
 
     @classmethod
     def change(cls, cls_new_screen, mode=1, *, args=[], kwargs={}):
@@ -435,7 +451,11 @@ class Screen:
                 s = time.ticks_us()  ## timing debug
 
             await asyncio.sleep_ms(0)  # Let user code respond to event
-            Screen.show(False)  # Update stale controls. No physical refresh.
+            dirty_box = Screen.show(False)  # Update stale controls. No physical refresh.
+            #if dirty_box[3] != 0:  #
+            #    ssd.show_partial(dirty_box[0], dirty_box[1], dirty_box[2], dirty_box[3])
+            #    continue
+
             # Now perform physical refresh.
             if arfsh:
                 await ssd.do_refresh(split)
