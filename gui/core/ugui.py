@@ -364,7 +364,7 @@ class Screen:
                     lrx = max(obj.col + obj.width, lrx)
                     lry = max(obj.row + obj.height, lry)
                     obj.show()
-                    force or print('r:'+str(obj))  # print object that caused update TODO: remove this
+                    force or (_vb and print('r:'+str(obj)))  # print object that caused update TODO: remove this
         if dirty:
             height = lry - uly
             width = lrx - ulx
@@ -464,7 +464,7 @@ class Screen:
 
             if cls.current_screen.sync_update: # timing debug
                 e = time.ticks_diff(time.ticks_us(), s)
-                print(f'ref: {e} us')
+                _vb and print(f'ref: {e} us')
 
             # Flag user code.
             cls.rfsh_done.set()
