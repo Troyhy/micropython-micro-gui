@@ -91,7 +91,7 @@ class Listbox(Widget):
         nl = self.dlines  # No. of lines that can fit in window
         self.ntop = max(0, min(self.ntop, l - nl))
         self._value = min(self._value, l - 1)
-        self.show()
+        self.draw = True
 
     def show(self):
         if not super().show(False):  # Clear to self.bgcolor
