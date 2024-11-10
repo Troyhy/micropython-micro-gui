@@ -1,4 +1,4 @@
-# ILI9341 nano-gui driver for ili9341 displays
+# ILI9341_8bit.py 8-bit nano-gui driver for ili9341 displays
 
 # Copyright (c) Peter Hinch 2020-2024
 # Released under the MIT license see LICENSE
@@ -19,38 +19,26 @@ from drivers.boolpalette import BoolPalette
 # g4 g3 g2 b7  b6 b5 b4 b3  r7 r6 r5 r4  r3 g7 g6 g5
 # ~80μs on RP2 @ 250MHz.
 @micropython.viper
-def _lcopy(dest: ptr16, source: ptr8, lut: ptr16, length: int, gscale: bool):
+def _lcopy(dest: ptr16, source: ptr8, length: int):
     # rgb565 - 16bit/pixel
     n: int = 0
-    x: int = 0
     while length:
-        c = source[x]
-        p = c >> 4  # current pixel
-        q = c & 0x0F  # next pixel
-        if gscale:
-            dest[n] = p >> 1 | p << 4 | p << 9 | ((p & 0x01) << 15)
-            n += 1
-            dest[n] = q >> 1 | q << 4 | q << 9 | ((q & 0x01) << 15)
-        else:
-            dest[n] = lut[p]  # current pixel
-            n += 1
-            dest[n] = lut[q]  # next pixel
+        c = source[n]
+        # Source byte holds 8-bit rrrgggbb
+        # source       rrrgggbb
+        # dest 000bb000rrr00ggg
+        dest[n] = (c & 0xE0) | ((c & 0x1C) >> 2) | ((c & 0x03) << 11)
         n += 1
-        x += 1
         length -= 1
 
 
 class ILI9341(framebuf.FrameBuffer):
 
-    lut = bytearray(32)
-
-    # Convert r, g, b in range 0-255 to a 16 bit colour value
-    # LS byte goes into LUT offset 0, MS byte into offset 1
-    # Same mapping in linebuf so LS byte is shifted out 1st
-    # ILI9341 expects RGB order
+    # Convert r, g, b in range 0-255 to an 8 bit colour value
+    # rrrgggbb. Converted to 16 bit on the fly.
     @staticmethod
     def rgb(r, g, b):
-        return (r & 0xF8) | (g & 0xE0) >> 5 | (g & 0x1C) << 11 | (b & 0xF8) << 5
+        return (r & 0xE0) | ((g >> 3) & 0x1C) | (b >> 6)
 
     # Transpose width & height for landscape mode
     def __init__(self, spi, cs, dc, rst, height=240, width=320, usd=False, init_spi=False):
@@ -62,14 +50,13 @@ class ILI9341(framebuf.FrameBuffer):
         self.height = height
         self.width = width
         self._spi_init = init_spi
-        self._gscale = False  # Interpret buffer as index into color LUT
-        self.mode = framebuf.GS4_HMSB
+        self.mode = framebuf.GS8
         self.palette = BoolPalette(self.mode)
         gc.collect()
-        buf = bytearray(self.height * self.width // 2)
+        buf = bytearray(height * width)
         self.mvb = memoryview(buf)
-        super().__init__(buf, self.width, self.height, self.mode)
-        self._linebuf = bytearray(self.width * 2)
+        super().__init__(buf, width, height, self.mode)
+        self._linebuf = bytearray(width * 2)
         # Hardware reset
         self._rst(0)
         sleep_ms(50)
@@ -92,7 +79,7 @@ class ILI9341(framebuf.FrameBuffer):
         self._wcd(b"\xc5", b"\x3E\x28")  # VMCTR1 VCOM ctrl 1
         self._wcd(b"\xc7", b"\x86")  # VMCTR2 VCOM ctrl 2
         # (b'\x88', b'\xe8', b'\x48', b'\x28')[rotation // 90]
-        if self.height > self.width:
+        if height > width:
             self._wcd(b"\x36", b"\x48" if usd else b"\x88")  # MADCTL: RGB portrait mode
         else:
             self._wcd(b"\x36", b"\x28" if usd else b"\xe8")  # MADCTL: RGB landscape mode
@@ -129,19 +116,10 @@ class ILI9341(framebuf.FrameBuffer):
         self._spi.write(data)
         self._cs(1)
 
-    def greyscale(self, gs=None):
-        if gs is not None:
-            self._gscale = gs
-        return self._gscale
-
-    # Time (ESP32 stock freq) 196ms portrait, 185ms landscape.
-    # mem free on ESP32 43472 bytes (vs 110192)
     @micropython.native
     def show(self):
-        clut = ILI9341.lut
-        wd = self.width // 2
+        wd = self.width
         ht = self.height
-        cm = self._gscale  # color False, greyscale True
         lb = self._linebuf
         buf = self.mvb
         if self._spi_init:  # A callback was passed
@@ -153,7 +131,7 @@ class ILI9341(framebuf.FrameBuffer):
         self._dc(1)
         self._cs(0)
         for start in range(0, wd * ht, wd):  # For each line
-            _lcopy(lb, buf[start:], clut, wd, cm)  # Copy and map colors
+            _lcopy(lb, buf[start:], wd)  # Copy and map colors
             self._spi.write(lb)
         self._cs(1)
 
@@ -171,10 +149,8 @@ class ILI9341(framebuf.FrameBuffer):
             lines, mod = divmod(self.height, split)  # Lines per segment
             if mod:
                 raise ValueError("Invalid do_refresh arg.")
-            clut = ILI9341.lut
-            wd = self.width // 2
+            wd = self.width
             ht = self.height
-            cm = self._gscale  # color False, greyscale True
             lb = self._linebuf
             buf = self.mvb
             # Commands needed to start data write
@@ -189,7 +165,7 @@ class ILI9341(framebuf.FrameBuffer):
                         self._spi_init(self._spi)  # Bus may be shared
                     self._cs(0)
                     for start in range(wd * line, wd * (line + lines), wd):  # For each line
-                        _lcopy(lb, buf[start:], clut, wd, cm)  # Copy and map colors
+                        _lcopy(lb, buf[start:], wd)  # Copy and map colors
                         self._spi.write(lb)
                     line += lines
                     self._cs(1)  # Allow other tasks to use bus

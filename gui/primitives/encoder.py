@@ -2,7 +2,7 @@
 # This is minimised for micro-gui. Derived from
 # https://github.com/peterhinch/micropython-async/blob/master/v3/primitives/encoder.py
 
-# Copyright (c) 2021-2023 Peter Hinch
+# Copyright (c) 2021-2024 Peter Hinch
 # Released under the MIT License (MIT) - see LICENSE file
 
 # Thanks are due to @ilium007 for identifying the issue of tracking detents,
@@ -11,19 +11,10 @@
 # against a state table design
 # https://github.com/miketeachman/micropython-rotary/blob/master/rotary.py
 
-import uasyncio as asyncio
+# Now uses ThreadSafeFlag.clear()
+
+import asyncio
 from machine import Pin
-from select import poll, POLLIN
-
-
-def ready(tsf, poller):
-    r = (tsf, POLLIN)
-    poller.register(*r)
-
-    def is_rdy():
-        return r in poller.ipoll(0)
-
-    return is_rdy
 
 
 class Encoder:
@@ -36,7 +27,6 @@ class Encoder:
         self._y = pin_y()
         self._v = 0  # Encoder value set by ISR
         self._tsf = asyncio.ThreadSafeFlag()
-        self._tsf_ready = ready(self._tsf, poll())  # Create a ready function
         trig = Pin.IRQ_RISING | Pin.IRQ_FALLING
         try:
             xirq = pin_x.irq(trigger=trig, handler=self._x_cb, hard=True)
@@ -62,8 +52,7 @@ class Encoder:
         pv = 0  # Prior hardware value
         pcv = 0  # Prior divided value passed to callback
         while True:
-            if self._tsf_ready():  # Ensure ThreadSafeFlag is clear
-                await self._tsf.wait()
+            self._tsf.clear()
             await self._tsf.wait()  # Wait for an edge
             await asyncio.sleep_ms(Encoder.delay)  # Wait for motion/bounce to stop.
             hv = self._v  # Sample hardware (atomic read).

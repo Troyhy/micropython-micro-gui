@@ -1,4 +1,4 @@
-# st7789_4bit.py Driver for ST7789 LCD displays for nano-gui
+# st7789_8bit.py Driver for ST7789 LCD displays for nano-gui
 
 # Released under the MIT License (MIT). See LICENSE.
 # Copyright (c) 2021-2024 Peter Hinch, Ihor Nehrutsa
@@ -38,57 +38,27 @@ WAVESHARE_13 = (0, 0, 16)  # Waveshare 1.3" 240x240 LCD contributed by Aaron Mit
 ADAFRUIT_1_9 = (35, 0, PORTRAIT)  #  320x170 TFT https://www.adafruit.com/product/5394
 
 
-# ST7789 commands
-_ST7789_SWRESET = b"\x01"
-_ST7789_SLPIN = b"\x10"
-_ST7789_SLPOUT = b"\x11"
-_ST7789_NORON = b"\x13"
-_ST7789_INVOFF = b"\x20"
-_ST7789_INVON = b"\x21"
-_ST7789_DISPOFF = b"\x28"
-_ST7789_DISPON = b"\x29"
-_ST7789_CASET = b"\x2a"
-_ST7789_RASET = b"\x2b"
-_ST7789_RAMWR = b"\x2c"
-_ST7789_VSCRDEF = b"\x33"
-_ST7789_COLMOD = b"\x3a"
-_ST7789_MADCTL = b"\x36"
-_ST7789_VSCSAD = b"\x37"
-_ST7789_RAMCTL = b"\xb0"
-
 @micropython.viper
-def _lcopy(dest: ptr16, source: ptr8, lut: ptr16, length: int, gscale: bool):
+def _lcopy(dest: ptr16, source: ptr8, length: int):
     # rgb565 - 16bit/pixel
     n: int = 0
-    x: int = 0
     while length:
-        c = source[x]
-        p = c >> 4  # current pixel
-        q = c & 0x0F  # next pixel
-        if gscale:
-            dest[n] = (p >> 1 | p << 4 | p << 9 | ((p & 0x01) << 15)) ^ 0xFFFF
-            n += 1
-            dest[n] = (q >> 1 | q << 4 | q << 9 | ((q & 0x01) << 15)) ^ 0xFFFF
-        else:
-            dest[n] = lut[p]  # current pixel
-            n += 1
-            dest[n] = lut[q]  # next pixel
+        c = source[n]
+        # Source byte holds 8-bit rrrgggbb
+        # source       rrrgggbb
+        # dest rrr00ggg000bb000
+        dest[n] = ((c & 0xE0) << 8) | ((c & 0x1C) << 6) | ((c & 0x03) << 3)
         n += 1
-        x += 1
         length -= 1
 
 
 class ST7789(framebuf.FrameBuffer):
 
-    lut = bytearray(0xFF for _ in range(32))  # set all colors to BLACK
-
-    # Convert r, g, b in range 0-255 to a 16 bit colour value rgb565.
-    # LS byte goes into LUT offset 0, MS byte into offset 1
-    # Same mapping in linebuf so LS byte is shifted out 1st
-    # For some reason color must be inverted on this controller.
+    # Convert r, g, b in range 0-255 to an 8 bit colour value
+    # rrrgggbb. Converted to 16 bit on the fly.
     @staticmethod
     def rgb(r, g, b):
-        return ((b & 0xF8) << 5 | (g & 0x1C) << 11 | (g & 0xE0) >> 5 | (r & 0xF8)) ^ 0xFFFF
+        return ((r & 0xE0) | ((g >> 3) & 0x1C) | (b >> 6)) ^ 0xFFFF
 
     # rst and cs are active low, SPI is mode 0
     def __init__(
@@ -117,10 +87,10 @@ class ST7789(framebuf.FrameBuffer):
         self._spi_init = init_spi  # Possible user callback
         self._lock = asyncio.Lock()
         self._gscale = False  # Interpret buffer as index into color LUT
-        self.mode = framebuf.GS4_HMSB  # Use 4bit greyscale.
+        self.mode = framebuf.GS8  # Use 8bit greyscale.
         self.palette = BoolPalette(self.mode)
         gc.collect()
-        buf = bytearray(height * -(-width // 2))  # Ceiling division for odd widths
+        buf = bytearray(height * width)
         self.mvb = memoryview(buf)
         super().__init__(buf, width, height, self.mode)
         self._linebuf = bytearray(self.width * 2)  # 16 bit color out
@@ -164,13 +134,13 @@ class ST7789(framebuf.FrameBuffer):
             self._spi_init(self._spi)  # Bus may be shared
         cmd = self._wcmd
         wcd = self._wcd
-        cmd(_ST7789_SWRESET)  # SW reset datasheet specifies 120ms before SLPOUT
+        cmd(b"\x01")  # SW reset datasheet specifies 120ms before SLPOUT
         sleep_ms(150)
-        cmd(_ST7789_SLPOUT)  # SLPOUT: exit sleep mode
+        cmd(b"\x11")  # SLPOUT: exit sleep mode
         sleep_ms(10)  # Adafruit delay 500ms (datsheet 5ms)
-        wcd(_ST7789_COLMOD, b"\x55")  # _COLMOD 16 bit/pixel, 65Kbit color space
-        cmd(_ST7789_INVOFF)  # INVOFF Adafruit turn inversion on. This driver fixes .rgb
-        cmd(_ST7789_NORON)  # NORON Normal display mode
+        wcd(b"\x3a", b"\x55")  # _COLMOD 16 bit/pixel, 65Kbit color space
+        cmd(b"\x20")  # INVOFF Adafruit turn inversion on. This driver fixes .rgb
+        cmd(b"\x13")  # NORON Normal display mode
 
         # Table maps user request onto hardware values. index values:
         # 0 Normal
@@ -192,8 +162,8 @@ class ST7789(framebuf.FrameBuffer):
         mode = (0x60, 0xE0, 0xA0, 0x20, 0, 0x40, 0xC0, 0x80)[user_mode]
         # Set display window depending on mode, .height and .width.
         self.set_window(mode)
-        wcd(_ST7789_MADCTL, int.to_bytes(mode, 1, "little"))
-        cmd(_ST7789_DISPON)  # DISPON. Adafruit then delay 500ms.
+        wcd(b"\x36", int.to_bytes(mode, 1, "little"))
+        cmd(b"\x29")  # DISPON. Adafruit then delay 500ms.
 
     # Define the mapping between RAM and the display.
     # Datasheet section 8.12 p124.
@@ -231,25 +201,17 @@ class ST7789(framebuf.FrameBuffer):
                 xe = rwd - xoff - 1
 
         # Col address set.
-        self._wcd(_ST7789_CASET, int.to_bytes((xs << 16) + xe, 4, "big"))
+        self._wcd(b"\x2a", int.to_bytes((xs << 16) + xe, 4, "big"))
         # Row address set
-        self._wcd(_ST7789_RASET, int.to_bytes((ys << 16) + ye, 4, "big"))
+        self._wcd(b"\x2b", int.to_bytes((ys << 16) + ye, 4, "big"))
 
-    def greyscale(self, gs=None):
-        if gs is not None:
-            self._gscale = gs
-        return self._gscale
-
-    # @micropython.native # Made virtually no difference to timing.
     def show(self):  # Blocks for 83ms @60MHz SPI
         # Blocks for 60ms @30MHz SPI on TTGO in PORTRAIT mode
         # Blocks for 46ms @30MHz SPI on TTGO in LANDSCAPE mode
         # ts = ticks_us()
-        clut = ST7789.lut
-        wd = -(-self.width // 2)  # Ceiling division for odd number widths
+        wd = self.width
         end = self.height * wd
         lb = memoryview(self._linebuf)
-        cm = self._gscale  # color False, greyscale True
         buf = self.mvb
         if self._spi_init:  # A callback was passed
             self._spi_init(self._spi)  # Bus may be shared
@@ -258,7 +220,7 @@ class ST7789(framebuf.FrameBuffer):
         self._spi.write(b"\x2c")  # RAMWR
         self._dc(1)
         for start in range(0, end, wd):
-            _lcopy(lb, buf[start:], clut, wd, cm)  # Copy and map colors
+            _lcopy(lb, buf[start:], wd)  # Copy and map colors
             self._spi.write(lb)
         self._cs(1)
         # print(ticks_diff(ticks_us(), ts))
@@ -277,10 +239,8 @@ class ST7789(framebuf.FrameBuffer):
             lines, mod = divmod(self.height, split)  # Lines per segment
             if mod:
                 raise ValueError("Invalid do_refresh arg.")
-            clut = ST7789.lut
-            wd = -(-self.width // 2)
+            wd = self.width
             lb = memoryview(self._linebuf)
-            cm = self._gscale  # color False, greyscale True
             buf = self.mvb
             line = 0
             for n in range(split):
@@ -292,7 +252,7 @@ class ST7789(framebuf.FrameBuffer):
                     self._spi.write(b"\x3c" if n else b"\x2c")  # RAMWR/Write memory continue
                     self._dc(1)
                     for start in range(wd * line, wd * (line + lines), wd):
-                        _lcopy(lb, buf[start:], clut, wd, cm)  # Copy and map colors
+                        _lcopy(lb, buf[start:], wd)  # Copy and map colors
                         self._spi.write(lb)
                     line += lines
                     self._cs(1)

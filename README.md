@@ -3,12 +3,14 @@
 This is a lightweight, portable, MicroPython GUI library for displays having
 drivers subclassed from `framebuf`. Written in Python it runs under a standard
 MicroPython firmware build. Options for data input comprise:
- * Two pushbuttons: limited capabilities with some widgets unusable for input.
- * Three pushbuttons with full capability.
- * Five pushbuttons: full capability, less "modal" interface.
+ * Two pushbuttons: restricted capabilities with some widgets unusable for input.
+ * All the following options offer full capability:
+ * Three pushbuttons.
+ * Five pushbuttons: extra buttons provide a less "modal" interface.
  * A switch-based navigation joystick: another way to implement five buttons.
- * Via two pushbuttons and a rotary encoder such as
+ * Two pushbuttons and a rotary encoder such as
  [this one](https://www.adafruit.com/product/377). An intuitive interface.
+ * A rotary encoder with built-in push switch only.
  * On ESP32 physical buttons may be replaced with touchpads.
 
 It is larger and more complex than `nano-gui` owing to the support for input.
@@ -65,18 +67,14 @@ target and a C device driver (unless you can acquire a suitable binary).
 
 # Project status
 
+Oct 2024: Oct 2024: Refresh locking can now be handled by device driver.  
+Sept 2024: Refresh control is now via a `Lock`. See [Realtime applications](./README.md#9-realtime-applications).
+This is a breaking change for applications which use refresh control.  
 Sept 2024: Dropdown and Listbox widgets support dynamically variable lists of elements.  
 April 2024: Add screen replace feature for non-tree navigation.  
 Sept 2023: Add "encoder only" mode suggested by @eudoxos.  
 April 2023: Add limited ePaper support, grid widget, calendar and epaper demos.
 Now requires firmware >= V1.20.  
-July 2022: Add ESP32 touch pad support.  
-June 2022: Add [QRMap](./README.md#620-qrmap-widget) and
-[BitMap](./README.md#619-bitmap-widget) widgets.  
-March 2022: Add [latency control](./README.md#45-class-variable) for hosts with
-SPIRAM.  
-February 2022: Supports use with only three buttons devised by Bart Cerneels.
-Simplified widget import. Existing users should replace the entire `gui` tree.  
 
 Code has been tested on ESP32, ESP32-S2, ESP32-S3, Pi Pico and Pyboard. This is
 under development so check for updates.
@@ -164,6 +162,8 @@ under development so check for updates.
 [Appendix 1 Application design](./README.md#appendix-1-application-design) Tab order, button layout, encoder interface, use of graphics primitives, more on callbacks.
 [Appendix 2 Freezing bytecode](./README.md#appendix-2-freezing-bytecode) Optional way to save RAM.  
 [Appendix 3 Cross compiling](./README.md#appendix-3-cross-compiling) Another way to save RAM.  
+[Appendix 4 GUI Design notes](./README.md#appendix-4-gui-design-notes) The reason for continuous refresh.  
+[Appendix 5 Bus sharing](./README.md#appendix-5-bus-sharing) Using the SD card on Waveshare boards.    
 
 # 1. Basic concepts
 
@@ -690,6 +690,8 @@ Some of these require larger screens. Required sizes are specified as
  * `listbox_var.py` Listbox with dynamically variable elements.
  * `dropdown_var.py` Dropdown with dynamically variable elements.
  * `dropdown_var_tuple.py ` Dropdown with dynamically variable tuple elements.
+ * `refresh_lock.py` Specialised demo of an application which controls refresh
+ behaviour. See [Realtime applications](./README.md#8-realtime-applications).
 
 ###### [Contents](./README.md#0-contents)
 
@@ -3215,41 +3217,79 @@ docs on `pushbutton.py` may be found
 
 # 9. Realtime applications
 
-Screen refresh is performed in a continuous loop with yields to the scheduler.
-In normal applications this works well, however a significant proportion of
-processor time is spent performing a blocking refresh. A means of synchronising
-refresh to other tasks is provided, enabling the application to control the
-screen refresh. This is done by means of two `Event` instances. The refresh
-task operates as below (code simplified to illustrate this mechanism).
+These notes assume an application based on `asyncio` that needs to handle events
+occurring in real time. There are two ways in which the GUI might affect real
+time performance:
+* By imposing latency on the scheduling of tasks.
+* By making demands on processing power such that a critical task is starved of
+execution.
 
+The GUI uses `asyncio` internally and runs a number of tasks. Most of these are
+simple and undemanding, the one exception being refresh. This has to copy the
+contents of the frame buffer to the hardware, and runs continuously. The way
+this works depends on the display type. On small displays with relatively few
+pixels it is a blocking, synchronous method. On bigger screens such a method
+would block for many tens of ms which would affect latency which would affect
+the responsiveness of the user interface. The drivers for such screens have an
+asynchronous `do_refresh` method: this divides the refresh into a small number
+of segments, each of which blocks for a short period, preserving responsiveness.
+
+In the great majority of applications this works well. For demanding cases a
+user-accessible `Lock` is provided to enable refresh to be paused. This is
+`Screen.rfsh_lock`. Further, the behaviour of this `Lock` can be modified. By
+default the refresh task will hold the `Lock` for the entire duration of a
+refresh. Alternatively the `Lock` can be held for the duration of the update of
+one segment. In testing on a Pico with ILI9341 the `Lock` duration was reduced
+from 95ms to 11.3ms. If an application has a task which needs to be scheduled at
+a high rate, this corresponds to an increase from 10Hz to 88Hz.
+
+The mechanism for controlling lock behaviour is a method of the `ssd` instance:
+* `short_lock(v=None)` If `True` is passed, the `Lock` will be held briefly,
+`False` will cause it to be held for the entire refresh, `None` makes no change.
+The method returns the current state. Note that only the larger display drivers
+support this method.
+
+The following (pseudocode, simplified) illustrates this mechanism:
 ```python
 class Screen:
-    rfsh_start = Event()  # Refresh pauses until set (set by default).
-    rfsh_done = Event()  # Flag a user task that a refresh was done.
+    rfsh_lock = Lock()  # Refresh pauses until lock is acquired
 
     @classmethod
     async def auto_refresh(cls):
-        cls.rfsh_start.set()
         while True:
-            await cls.rfsh_start.wait()
-            ssd.show()  # Synchronous (blocking) refresh.
-            # Flag user code.
-            cls.rfsh_done.set()
-            await asyncio.sleep_ms(0)  # Let user code respond to event
+            if display_supports_segmented_refresh and short_lock_is_enabled:
+                # At intervals yield and release the lock
+                await ssd.do_refresh(split, cls.rfsh_lock)
+            else:  # Lock for the entire refresh
+                await asyncio.sleep_ms(0)  # Let user code respond to event
+                async with cls.rfsh_lock:
+                    if display_supports_segmented_refresh:
+                        # Yield at intervals (retaining lock)
+                        await ssd.do_refresh(split)  # Segmented refresh
+                    else:
+                        ssd.show()  # Blocking synchronous refresh on small screen.
 ```
-By default the `rfsh_start` event is permanently set, allowing refresh to free
-run. User code can clear this event to delay refresh. The `rfsh_done` event can
-signal to user code that refresh is complete. As an example of simple usage,
-the following, if awaited, pauses until a refresh is complete and prevents
-another from occurring.
+User code can wait on the lock and, once acquired, run asynchronous code which
+cannot be interrupted by a refresh. This is normally done with an asynchronous
+context manager:
 ```python
-    async def refresh_and_stop(self):
-        Screen.rfsh_start.set()  # Allow refresh
-        Screen.rfsh_done.clear()  # Enable completion flag
-        await Screen.rfsh_done.wait()  # Wait for a refresh to end
-        Screen.rfsh_start.clear()  # Prevent another.
+async with Screen.rfsh_lock:
+    # do something that can't be interrupted with a refresh
 ```
-The demo `gui/demos/audio.py` provides example usage.
+The demo `refresh_lock.py` illustrates this mechanism, allowing refresh to be
+started and stopped. The demo also allows the `short_lock` method to be tested,
+with a display of the scheduling rate of a minimal locked task. In a practical
+application this rate is dependant on various factors. A number of debugging
+aids exist to assist in measuring and optimising this. See
+[this doc](https://github.com/peterhinch/micropython-async/blob/master/v3/README.md).
+
+The demo `gui/demos/audio.py`
+provides an example, where the `play_song` task gives priority to maintaining
+the audio buffer. It does this by holding the lock for several iterations of
+buffer filling before releasing the lock to allow a single refresh.
+
+See [Appendix 4 GUI Design notes](./README.md#appendix-4-gui-design-notes) for
+the reason for continuous refresh.  
 
 # 10 ePaper displays
 
@@ -3497,6 +3537,8 @@ changes. I also keep the display driver and `boolpalette.py` in the filesystem
 as I have experienced problems freezing display drivers - but feel free to
 experiment.
 
+###### [Contents](./README.md#0-contents)
+
 ## Appendix 3 Cross compiling
 
 This addresses the case where a memory error occurs on import. There are better
@@ -3513,3 +3555,106 @@ This creates a file `ugui.mpy`. It is necessary to move, delete or rename
 
 If "incorrect mpy version" errors occur, the cross compiler should be
 recompiled.
+
+## Appendix 4 GUI Design notes
+
+A user (Toni Röyhy) raised the question of why refresh operates as a continuous
+background task, even when nothing has changed on screen. The concern was that
+it may result in needless power consumption. The following reasons apply:
+* It enables applications to draw on the screen using FrameBuffer primitives
+without the need to notify the GUI to perform a refresh.
+* There is a mechanism for stopping refresh in those rare occasions when it is
+necessary.
+* Stopping refresh has no measurable effect on power consumption. This is
+because `asyncio` continues to schedule tasks even if refresh is paused. Overall
+CPU activity remains high. The following script may be used to confirm this.
+
+```py
+import hardware_setup  # Create a display instance
+from gui.core.ugui import Screen, ssd
+
+from gui.widgets import Label, Button, CloseButton, LED
+from gui.core.writer import CWriter
+import gui.fonts.arial10 as arial10
+from gui.core.colors import *
+import asyncio
+
+async def stop_rfsh():
+    await Screen.rfsh_lock.acquire()
+
+def cby(_):
+    asyncio.create_task(stop_rfsh())
+
+def cbn(_):
+    Screen.rfsh_lock.release()  # Allow refresh
+
+class BaseScreen(Screen):
+    def __init__(self):
+
+        super().__init__()
+        wri = CWriter(ssd, arial10, GREEN, BLACK, verbose=False)
+        col = 2
+        row = 2
+        Label(wri, row, col, "Refresh test")
+        self.led = LED(wri, row, 80)
+        row = 50
+        Button(wri, row, col, text="Stop", callback=cby)
+        col += 60
+        Button(wri, row, col, text="Start", callback=cbn)
+        self.reg_task(self.flash())
+        CloseButton(wri)  # Quit
+
+    async def flash(self):  # Proof of stopped refresh
+        while True:
+            self.led.value(not self.led.value())
+            await asyncio.sleep_ms(300)
+
+def test():
+    print("Refresh test.")
+    Screen.change(BaseScreen)
+
+test()
+```
+###### [Contents](./README.md#0-contents)
+
+## Appendix 5 Bus sharing
+
+Boards from Waveshare use the same SPI bus to access the display controller, the
+touch controller, and an optional SD card. If an SD card is fitted, it is
+possible to mount this in `boot.py`: doing this enables the filesystem on the
+SD card to be managed at the Bash prompt using `mpremote`. There is a "gotcha"
+here. For this to work reliably, the `CS\` pins of the display controller and
+the touch controller must be set high, otherwise bus contention on the `miso`
+line can occur. Note that this still applies even if the touch controller is
+unused: it should still be prevented from asserting `miso`. The following is an
+example of a `boot.py` for the 2.8" Pico Res touch.
+```py
+from machine import SPI, Pin
+from sdcard import SDCard
+import os
+BAUDRATE = 3_000_000  # Much higher rates seem OK, but may depend on card.
+# Initialise all CS\ pins
+cst = Pin(16, Pin.OUT, value=1)  # Touch XPT2046
+csd = Pin(9, Pin.OUT, value=1)  # Display ST7789
+css = Pin(22, Pin.OUT, value=1)  # SD card
+spi = SPI(1, BAUDRATE, sck=Pin(10), mosi=Pin(11), miso=Pin(12))
+sd = SDCard(spi, css, BAUDRATE)
+vfs = os.VfsFat(sd)
+os.mount(vfs, "/sd")
+```
+An application which is to access the SD card must ensure that the GUI is
+prevented from accessing the SPI bus for the duration of SD card access. This
+may be done with an asynchronous context manager. When the context manager
+terminates, refresh will re-start.
+```py
+async def read_data():
+    async with Screen.rfsh_lock:
+        # set up the SPI bus baudrate for the SD card
+        # read the data
+    await asyncio.sleep_ms(0)  # Allow refresh and touch to proceed
+    # Do anything else you need
+```
+See section 8 for further background. Tested by @bianc104 in micropython-touch
+[iss 15](https://github.com/peterhinch/micropython-touch/issues/15#issuecomment-2397988225)
+
+###### [Contents](./README.md#0-contents)
