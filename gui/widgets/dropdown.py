@@ -51,6 +51,8 @@ class _ListDialog(Window):
         Screen.back()
         self.dd.value(obj_listbox.value())  # Update it
 
+    def move(self, n):
+        Screen.back() # cancel if next or prev is pressed
 
 class Dropdown(Widget):
     def __init__(
@@ -158,6 +160,7 @@ class Dropdown(Widget):
             args = (self.writer, self.row - 2, self.col - 2, self, self.dlines, self.els)
             Screen.change(_ListDialog, args=args)
             display.ipdev.adj_mode(True)  # If in 3-button mode, go into adjust mode
+
 
     def _despatch(self, _):  # Run the callback specified in elements
         x = self.els[self()]

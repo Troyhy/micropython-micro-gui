@@ -724,7 +724,7 @@ class Widget:
         self.mrow = row + height + 2  # in subclass. Allow for border.
         self.mcol = col + width + 2
         self.visible = True  # Used by ButtonList class for invisible buttons
-        self._draw = True  # Signals that object must be redrawn
+        self.__draw = True  # Signals that object must be redrawn
         self._value = value
 
         # Set colors. Writer colors cannot be None:
@@ -750,12 +750,12 @@ class Widget:
 
     @property
     def draw(self):
-        return self._draw
+        return self.__draw
 
     @draw.setter
     def draw(self, value):
-        self._draw = bool(value)
-        if self._draw and Screen.current_screen.sync_update:
+        self.__draw = bool(value)
+        if self.__draw and Screen.current_screen.sync_update:
             Screen.rfsh_start.set()
 
     def warning(self):
