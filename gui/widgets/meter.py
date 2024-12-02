@@ -20,7 +20,7 @@ class Meter(Widget):
         self.divisions = divisions
         if label is not None:
             # Ensure bottom legend has space
-            Label(writer, row + height + writer.height // 2, col, label)
+            self.label = Label(writer, row + height + writer.height // 2, col, label)
         self.style = style
         self.ptcolor = ptcolor if ptcolor is not None else self.fgcolor
         if legends is not None:  # Legends are static
@@ -48,7 +48,7 @@ class Meter(Widget):
         return n
         
     def show(self):
-        if super().show():  # Draw or erase border
+        if super().show(False):  # Draw or erase border
             val = super().value()
             wri = self.writer
             width = self.width
