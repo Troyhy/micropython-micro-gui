@@ -38,6 +38,9 @@ else:
     DARKGREEN = SSD.rgb(0, 80, 0)
     DARKBLUE = SSD.rgb(0, 0, 90)
     WHITE = SSD.rgb(255, 255, 255)
+    D_PINK = SSD.rgb(0xFF, 0, 0xF0)
+    D_GREEN = SSD.rgb(0x33, 0xFF, 0)
+    D_RED = SSD.rgb(0xD2, 0x00, 0)
 
 CIRCLE = 1
 RECTANGLE = 2
@@ -48,5 +51,5 @@ PRECISION = 1
 FG = 2
 BG = 3
 GREY_OUT = 4
-ADJUSTING = 5
-color_map = [WHITE, YELLOW, WHITE, BLACK, GREY, LIGHTGREEN]
+ADJUSTING = 6
+color_map = [WHITE, YELLOW, WHITE, BLACK, GREY, LIGHTGREEN,D_PINK, D_GREEN, D_RED]
